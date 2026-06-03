@@ -1,6 +1,6 @@
 """
 ربات تلگرام برای جمع‌آوری و دسته‌بندی فایل‌ها
-نصب: pip install python-telegram-bot
+نصب: pip install python-telegram-bot httpx[socks]
 """
 
 import os
@@ -16,13 +16,13 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+import httpx
 
 # ──────────────────────────────────────────────
 # تنظیمات
 # ──────────────────────────────────────────────
-BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"   # توکن ربات خود را اینجا بگذارید
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
-# پوشه‌های دسته‌بندی
 CATEGORIES = {
     "مدارک": "مدارک",
     "دانشگاه": "دانشگاه",
@@ -30,23 +30,19 @@ CATEGORIES = {
     "سایر": "سایر",
 }
 
-BASE_DIR = "فایل‌های_من"   # پوشه اصلی ذخیره فایل‌ها
+BASE_DIR = "/tmp/فایل‌های_من"
 
-# پسوندهای هر نوع فایل
 EXTENSION_MAP = {
-    "pdf": ["مدارک", "بانکی", "دانشگاه"],
-    "jpg": ["مدارک"],
-    "jpeg": ["مدارک"],
-    "png": ["مدارک"],
-    "docx": ["دانشگاه", "مدارک"],
-    "doc": ["دانشگاه", "مدارک"],
-    "xlsx": ["بانکی"],
-    "xls": ["بانکی"],
+    "pdf": "مدارک",
+    "jpg": "مدارک",
+    "jpeg": "مدارک",
+    "png": "مدارک",
+    "docx": "دانشگاه",
+    "doc": "دانشگاه",
+    "xlsx": "بانکی",
+    "xls": "بانکی",
 }
 
-# ──────────────────────────────────────────────
-# راه‌اندازی لاگ
-# ──────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -55,36 +51,28 @@ logger = logging.getLogger(__name__)
 
 
 def ensure_dirs():
-    """ساخت پوشه‌های دسته‌بندی در صورت نبودن"""
     for cat in CATEGORIES.values():
         os.makedirs(os.path.join(BASE_DIR, cat), exist_ok=True)
 
 
 def get_suggested_category(filename: str) -> str:
-    """پیشنهاد دسته‌بندی بر اساس پسوند فایل"""
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    suggestions = EXTENSION_MAP.get(ext, [])
-    return suggestions[0] if suggestions else "سایر"
+    return EXTENSION_MAP.get(ext, "سایر")
 
 
 def save_file(file_path: str, filename: str, category: str) -> str:
-    """ذخیره فایل در پوشه دسته‌بندی مناسب"""
     dest_dir = os.path.join(BASE_DIR, category)
     os.makedirs(dest_dir, exist_ok=True)
-
-    # اگر فایلی با همین نام وجود داشت، تاریخ اضافه می‌شود
     base, ext = os.path.splitext(filename)
     dest_path = os.path.join(dest_dir, filename)
     if os.path.exists(dest_path):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         dest_path = os.path.join(dest_dir, f"{base}_{timestamp}{ext}")
-
     shutil.move(file_path, dest_path)
     return dest_path
 
 
 def category_keyboard(suggested: str = None):
-    """کیبورد انتخاب دسته‌بندی"""
     buttons = []
     for cat in CATEGORIES.keys():
         label = f"✅ {cat}" if cat == suggested else cat
@@ -93,7 +81,6 @@ def category_keyboard(suggested: str = None):
 
 
 def list_files_text() -> str:
-    """نمایش لیست فایل‌ها به تفکیک دسته"""
     ensure_dirs()
     lines = ["📁 *فایل‌های ذخیره‌شده:*\n"]
     total = 0
@@ -104,7 +91,7 @@ def list_files_text() -> str:
         total += len(files)
         if files:
             lines.append(f"📂 *{cat}* ({len(files)} فایل)")
-            for f in files[-5:]:   # فقط ۵ فایل آخر هر دسته
+            for f in files[-5:]:
                 lines.append(f"  • {f}")
             if len(files) > 5:
                 lines.append(f"  _... و {len(files)-5} فایل دیگر_")
@@ -114,9 +101,6 @@ def list_files_text() -> str:
     return "\n".join(lines)
 
 
-# ──────────────────────────────────────────────
-# هندلرها
-# ──────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "سلام! 👋\n\n"
@@ -150,11 +134,9 @@ async def list_files(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دریافت هر نوع فایل"""
     ensure_dirs()
     message = update.message
 
-    # تشخیص نوع فایل
     if message.document:
         tg_file = await message.document.get_file()
         filename = message.document.file_name or f"file_{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -171,14 +153,10 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("این نوع پیام پشتیبانی نمی‌شود.")
         return
 
-    # دانلود موقت
     tmp_path = os.path.join("/tmp", filename)
     await tg_file.download_to_drive(tmp_path)
 
-    # پیشنهاد دسته
     suggested = get_suggested_category(filename)
-
-    # ذخیره اطلاعات موقت در context
     context.user_data["pending_file"] = tmp_path
     context.user_data["pending_filename"] = filename
 
@@ -192,7 +170,6 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_category_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """پردازش انتخاب دسته‌بندی"""
     query = update.callback_query
     await query.answer()
 
@@ -204,23 +181,28 @@ async def handle_category_choice(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text("خطا: فایل پیدا نشد. دوباره ارسال کنید.")
         return
 
-    saved_path = save_file(file_path, filename, category)
+    save_file(file_path, filename, category)
     context.user_data.pop("pending_file", None)
     context.user_data.pop("pending_filename", None)
 
     await query.edit_message_text(
-        f"✅ فایل *{filename}* در دسته *{category}* ذخیره شد!\n\n"
-        f"مسیر: `{saved_path}`",
+        f"✅ فایل *{filename}* در دسته *{category}* ذخیره شد!",
         parse_mode="Markdown",
     )
 
 
-# ──────────────────────────────────────────────
-# اجرا
-# ──────────────────────────────────────────────
 def main():
     ensure_dirs()
-    app = Application.builder().token(BOT_TOKEN).build()
+    
+    # استفاده از proxy برای دور زدن محدودیت‌ها
+    proxy_url = os.environ.get("PROXY_URL", "")
+    
+    builder = Application.builder().token(BOT_TOKEN)
+    
+    if proxy_url:
+        builder = builder.proxy(proxy_url).get_updates_proxy(proxy_url)
+    
+    app = builder.build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
